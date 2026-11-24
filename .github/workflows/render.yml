@@ -1,0 +1,80 @@
+name: Render a Short
+run-name: "Render · ${{ inputs.episode || 'episodes/night-window.json' }}"
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/render.yml', 'scripts/render.*', 'src/**', 'episodes/**', 'package*.json', 'vendor/**']
+  workflow_dispatch:
+    inputs:
+      episode:
+        description: 'Repository episode JSON path'
+        required: true
+        default: episodes/night-window.json
+        type: string
+      publish:
+        description: 'Also publish a durable GitHub Release download (main only)'
+        type: boolean
+        default: false
+concurrency:
+  group: render-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      EPISODE: ${{ inputs.episode || 'episodes/night-window.json' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci && npm test
+      - name: Prepare encoder and browser
+        run: |
+          # Linux tools arrive via npm ci with integrity hashes in the lockfile.
+          echo "$PWD/node_modules/@ffmpeg-installer/linux-x64" >> "$GITHUB_PATH"
+          echo "$PWD/node_modules/@ffprobe-installer/linux-x64" >> "$GITHUB_PATH"
+          echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          google-chrome --version
+      - name: Render exact frames and audio on the runner
+        run: npm run render -- "$EPISODE"
+      - name: Verify MP4 tracks, cadence and duration
+        run: node scripts/verify-render.mjs "$EPISODE"
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: short-${{ github.run_id }}-${{ github.run_attempt }}
+          path: render-output/*.mp4
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Link download
+        env:
+          DOWNLOAD: ${{ steps.upload.outputs.artifact-url }}
+        run: printf '[Download the rendered MP4 (zipped)](%s)\n' "$DOWNLOAD" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: render
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: short-${{ github.run_id }}-${{ github.run_attempt }}
+          path: export
+      - name: Publish verified video
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "short-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" export/*.mp4 \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Cutframe · $(basename export/*.mp4 .mp4)" \
+            --notes "Rendered and verified by [GitHub Actions]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."

@@ -1,0 +1,17 @@
+{
+  "name": "cutframe-psx-studio",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "render": "node scripts/render.mjs",
+    "narrate": "node scripts/narrate.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "25.18.1"
+  },
+  "optionalDependencies": {
+    "@ffmpeg-installer/linux-x64": "4.1.0",
+    "@ffprobe-installer/linux-x64": "5.2.0"
+  }
+}
